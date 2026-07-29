@@ -17,6 +17,16 @@ from .models import (
     StereoHint,
     VideoItem,
 )
+from .media import (
+    AuthStatus,
+    Capability,
+    ContentRating,
+    ContentType,
+    MediaItem,
+    SourceConfig,
+    StreamInfo,
+    rating_at_or_below,
+)
 from .provider import PhotoLibrary, Provider, VideoLibrary
 
 __all__ = [
@@ -32,6 +42,14 @@ __all__ = [
     "StereoHint",
     "VideoItem",
     "VideoLibrary",
+    "AuthStatus",
+    "Capability",
+    "ContentRating",
+    "ContentType",
+    "MediaItem",
+    "SourceConfig",
+    "StreamInfo",
+    "rating_at_or_below",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
