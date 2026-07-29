@@ -39,7 +39,7 @@ def _title_year(path: str) -> tuple[str, int | None]:
     if m:
         return m.group("title"), int(m.group("year"))
     stem = os.path.splitext(os.path.basename(path))[0]
-    return re.sub(r"(\.(fsbs|hsbs|sbs|tab|ou|3d))+$", "", stem,
+    return re.sub(r"(\.(fsbs|hsbs|ftab|htab|sbs|tab|fou|hou|ou|3d))+$", "", stem,
                   flags=re.IGNORECASE), None
 
 
