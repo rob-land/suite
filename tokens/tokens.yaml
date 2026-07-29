@@ -1,0 +1,73 @@
+# Suite design tokens — single source of truth.
+# See beampro/docs/16-suite-design-language.md for rationale.
+# Regenerate outputs with: python3 tokens/generate.py
+#
+# Angular units: dmm (1 mm at 1 m ≈ 0.057°). Shells map dmm to their
+# native units; the px values here are the couch/hearth mapping at
+# 1080p/10-foot (~1 dmm ≈ 1.05 px at 3 m on a 55" panel — rounded).
+
+color:
+  accent: "#3584e4"          # Adwaita blue — focus, selection, progress
+  accent-dim: "#1c71d8"
+  success: "#33d17a"
+  warning: "#e5a50a"
+  error: "#e01b24"
+  # Opaque shells (couch, hearth, VR posture)
+  surface: "#1d1d20"
+  surface-raised: "#28282c"
+  text: "#ffffff"
+  text-secondary: "#ffffffb3"   # 70%
+  scrim: "#000000a6"            # 65% black gradient base over art
+  # Additive shells (zoetrope on see-through optics)
+  glass-fill: "#ffffff1f"       # white 12%
+  glass-stroke: "#ffffff59"     # white 35%
+  glass-text-secondary-floor: "#ffffff8c"  # never below 55%
+
+radius:
+  card_dmm: 12
+  panel_dmm: 12
+  card_px: 12
+  overlay_px: 16
+
+type:                       # angular first; px = 1080p 10-foot mapping
+  body_dmm: 24              # hard floor ≥1.5° subtense
+  caption_dmm: 20
+  title_dmm: 36
+  display_dmm: 48
+  body_px: 29
+  caption_px: 24
+  title_px: 44
+  display_px: 58
+  weight_min: 500           # no thin strokes on TV or in-lens
+
+focus:
+  scale: 1.06
+  ring_dmm: 3
+  ring_px: 3
+  anim_ms: 140
+  ack_ms: 50                # input acknowledged within this, always
+  tilt_deg: 2.5             # parallax tilt on the focused card
+
+target:
+  gaze_min_dmm: 80          # head-gaze floor
+  ray_min_dmm: 64           # laser/controller floor (Daydream)
+  touch_min_px: 48
+  pad_dmm: 16
+
+card:
+  poster_aspect: [2, 3]
+  video_aspect: [16, 9]
+  square_aspect: [1, 1]
+  gap_dmm: 20
+  gap_px: 20
+  peek_fraction: 0.25       # next card peeks to signal scrollability
+
+motion:
+  nav_ms: 200               # focus/navigation ease-out
+  ambient_fade_ms: 600
+  overlay_ms: 180
+  relocate: fade            # spatial: fade-out/in, never fly across
+
+ambient:
+  idle_active_to_ambient_s: 600
+  toast_height_dmm: 20

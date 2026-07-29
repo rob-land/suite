@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "suite-providers"
+version = "0.1.0"
+description = "Shared media-backend abstraction for the suite (zoetrope / couch / hearth): stereo-aware models, Watch Next semantics, provider interfaces"
+license = { text = "GPL-3.0-or-later" }
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+network = ["httpx>=0.27"]
+
+[tool.setuptools.packages.find]
+include = ["suite_providers*"]
