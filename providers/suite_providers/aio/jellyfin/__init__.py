@@ -9,3 +9,6 @@ External callers still `from ..providers.jellyfin import JellyfinProvider`.
 from .jellyfin import JellyfinProvider
 
 __all__ = ["JellyfinProvider"]
+from .discovery import DiscoveredServer, discover  # noqa: E402
+
+__all__ = ["JellyfinProvider", "DiscoveredServer", "discover"]

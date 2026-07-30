@@ -87,3 +87,32 @@ def test_stream_info_carries_the_stereo_hint():
     # The 3D-configured player reads this; a 2D player just ignores it.
     assert stream.stereo.format is StereoFormat.SBS_HALF
     assert "a" in stream.url
+
+
+def test_udp_discovery_against_fake_server():
+    import json
+    import socket
+    import threading
+
+    from suite_providers.aio.jellyfin import discover
+    from suite_providers.aio.jellyfin.discovery import DISCOVERY_MESSAGE
+
+    srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    srv.bind(("127.0.0.1", 0))
+    port = srv.getsockname()[1]
+
+    def responder():
+        data, addr = srv.recvfrom(1024)
+        assert data == DISCOVERY_MESSAGE
+        srv.sendto(json.dumps({"Address": "http://127.0.0.1:8096",
+                               "Id": "abc", "Name": "Home"}).encode(), addr)
+
+    t = threading.Thread(target=responder, daemon=True)
+    t.start()
+    servers = asyncio.run(discover(timeout=0.5, broadcast="127.0.0.1",
+                                   port=port))
+    srv.close()
+    assert len(servers) == 1
+    assert servers[0].name == "Home"
+    assert servers[0].url == "http://127.0.0.1:8096"
+    assert servers[0].server_id == "abc"
