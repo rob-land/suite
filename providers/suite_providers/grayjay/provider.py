@@ -1,0 +1,206 @@
+"""GrayjayProvider — a Grayjay plugin as a suite MediaProvider.
+
+One class turns every Grayjay plugin the user installs into a backend
+for all the suite shells: couch's rails, zoetrope's glasses rails, and
+anything else driving ``suite_providers.aio``.
+
+Plugin calls are synchronous (QuickJS + blocking HTTP), so each one runs
+in a worker thread via ``asyncio.to_thread`` and the async interface
+stays honest. One plugin instance is single-threaded by construction: a
+lock serializes calls into its context.
+"""
+from __future__ import annotations
+
+import asyncio
+import threading
+from typing import Any
+
+from ..media import (
+    Capability,
+    ContentType,
+    MediaItem,
+    StreamInfo,
+)
+from ..models import StereoConfidence, StereoFormat, StereoHint
+from ..naming import video_stereo_hint
+from .host import PluginConfig, PluginHost
+
+#: Source kinds we can hand to mpv directly, best first.
+_STREAM_PRIORITY = ("HLSSource", "DashSource", "VideoUrlSource",
+                    "DashManifestRawSource", "VideoUrlRangeSource")
+
+
+def _sources(descriptor: Any) -> list[dict]:
+    """Flatten a video descriptor into a list of source dicts.
+
+    Plugins spell these several ways (``videoSources``, ``sources``, a
+    bare array, or an object with numeric keys after marshalling).
+    """
+    if descriptor is None:
+        return []
+    if isinstance(descriptor, list):
+        return [s for s in descriptor if isinstance(s, dict)]
+    if not isinstance(descriptor, dict):
+        return []
+    for key in ("videoSources", "sources"):
+        if isinstance(descriptor.get(key), list):
+            return [s for s in descriptor[key] if isinstance(s, dict)]
+    numeric = [descriptor[k] for k in sorted(descriptor, key=str)
+               if k.isdigit() and isinstance(descriptor[k], dict)]
+    return numeric
+
+
+def pick_stream(descriptor: Any) -> dict | None:
+    """Best playable source for mpv: prefer adaptive manifests, then the
+    highest-resolution progressive URL."""
+    srcs = [s for s in _sources(descriptor) if s.get("url")]
+    if not srcs:
+        return None
+
+    def rank(s: dict) -> tuple[int, int]:
+        kind = s.get("plugin_type") or ""
+        try:
+            order = _STREAM_PRIORITY.index(kind)
+        except ValueError:
+            order = len(_STREAM_PRIORITY)
+        return (order, -int(s.get("height") or s.get("width") or 0))
+
+    return sorted(srcs, key=rank)[0]
+
+
+def _thumbnail(item: dict) -> str | None:
+    thumbs = ((item.get("thumbnails") or {}).get("sources")
+              or item.get("thumbnails") or [])
+    if isinstance(thumbs, list) and thumbs:
+        best = max((t for t in thumbs if isinstance(t, dict)),
+                   key=lambda t: t.get("quality") or 0, default=None)
+        if best:
+            return best.get("url")
+    return None
+
+
+class GrayjayProvider:
+    """Adapts one loaded plugin to the suite's provider surface.
+
+    Deliberately duck-typed rather than subclassing ``MediaProvider``:
+    Grayjay plugins have no accounts of their own (the shells' profile
+    credentials don't apply), so the ``credentials`` arguments are
+    accepted and ignored.
+    """
+
+    def __init__(self, config: PluginConfig, script: str, *,
+                 settings: dict | None = None, call_timeout: float = 45.0):
+        self.config = config
+        self.provider_id = f"grayjay:{config.id}"
+        self.display_name = config.name
+        self.source_id = self.provider_id
+        self.source_display_name = config.name
+        self._call_timeout = call_timeout
+        self._lock = threading.Lock()
+        self._host = PluginHost(config, script)
+        self._host.enable(settings)
+
+    # -- plumbing ---------------------------------------------------------
+
+    async def _call(self, method: str, *args: Any) -> Any:
+        """Run a plugin method off the event loop, bounded."""
+        def run():
+            with self._lock:
+                return self._host.call(method, *args)
+        return await asyncio.wait_for(asyncio.to_thread(run),
+                                      timeout=self._call_timeout)
+
+    def _to_item(self, v: dict) -> MediaItem:
+        author = v.get("author") or {}
+        vid = v.get("id") or {}
+        stereo = video_stereo_hint(v.get("name") or "")
+        if not stereo.format.is_stereo:
+            stereo = StereoHint(StereoFormat.MONO, StereoConfidence.NONE)
+        return MediaItem(
+            provider_id=self.source_id,
+            provider_item_id=str(vid.get("value") or v.get("url") or ""),
+            title=v.get("name") or "",
+            content_type=ContentType.MOVIE,
+            description=v.get("description") or "",
+            runtime_seconds=int(v.get("duration") or 0) or None,
+            poster_url=_thumbnail(v),
+            stereo=stereo,
+            extras={
+                "grayjay_url": v.get("url"),
+                "author": author.get("name"),
+                "is_live": bool(v.get("isLive")),
+                "plugin": self.config.name,
+            },
+        )
+
+    @staticmethod
+    def _results(pager: Any) -> list[dict]:
+        if isinstance(pager, dict):
+            res = pager.get("results")
+            if isinstance(res, list):
+                return [v for v in res if isinstance(v, dict)]
+        if isinstance(pager, list):
+            return [v for v in pager if isinstance(v, dict)]
+        return []
+
+    # -- provider surface -------------------------------------------------
+
+    def get_capabilities(self) -> set[Capability]:
+        caps = {Capability.MOVIES}
+        if self._host.has("search"):
+            caps.add(Capability.SEARCH)
+        return caps
+
+    async def authenticate(self, credentials=None):
+        from ..media import AuthStatus
+        return AuthStatus(ok=True)
+
+    async def list_library(self, content_type=None, credentials=None,
+                           max_content_rating_index=None,
+                           limit: int = 60) -> list[MediaItem]:
+        """The plugin's home feed."""
+        if not self._host.has("getHome"):
+            return []
+        pager = await self._call("getHome")
+        return [self._to_item(v) for v in self._results(pager)[:limit]]
+
+    async def search(self, query: str, credentials=None,
+                     max_content_rating_index=None) -> list[MediaItem]:
+        if not self._host.has("search"):
+            return []
+        pager = await self._call("search", query, None, None, None)
+        return [self._to_item(v) for v in self._results(pager)]
+
+    async def get_continue_watching(self, credentials=None,
+                                    max_content_rating_index=None,
+                                    limit: int = 12) -> list[MediaItem]:
+        return []  # plugins hold no watch state; the shells' DB does
+
+    async def get_stream_url(self, item: MediaItem,
+                             credentials=None) -> StreamInfo:
+        url = (item.extras or {}).get("grayjay_url")
+        if not url:
+            raise RuntimeError(f"{item.title}: no plugin URL to resolve")
+        details = await self._call("getContentDetails", url)
+        source = pick_stream((details or {}).get("video"))
+        if not source or not source.get("url"):
+            raise RuntimeError(
+                f"{self.config.name} returned no playable source for "
+                f"{item.title}")
+        opts, headers = {}, {}
+        for key, value in (source.get("requestModifier") or {}).items():
+            if key == "headers" and isinstance(value, dict):
+                headers.update(value)
+        return StreamInfo(url=source["url"], mpv_options=opts,
+                          headers=headers, stereo=item.stereo)
+
+    async def report_progress(self, item, position_seconds, credentials=None,
+                              completed: bool = False) -> None:
+        return None
+
+    async def close(self) -> None:
+        self._host.close()
+
+    @property
+    def logs(self) -> list[str]:
+        return self._host.logs
