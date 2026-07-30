@@ -17,6 +17,8 @@ bounded.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import pathlib
 import time
@@ -24,6 +26,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urljoin, urlparse, urlsplit
+
+from .engines import make_engine
 
 PRELUDE = (pathlib.Path(__file__).parent / "prelude.js").read_text()
 
@@ -94,9 +98,7 @@ class PluginHost:
 
     def __init__(self, config: PluginConfig, script: str, *,
                  http_client=None, timeout: float = 30.0,
-                 memory_limit_mb: int = 256):
-        import quickjs
-
+                 memory_limit_mb: int = 256, engine: str = "auto"):
         self.config = config
         self.timeout = timeout
         self._log: list[str] = []
@@ -109,26 +111,23 @@ class PluginHost:
                 headers={"User-Agent": DEFAULT_UA})
         self._http = http_client
 
-        self.ctx = quickjs.Context()
-        try:
-            self.ctx.set_memory_limit(memory_limit_mb * 1024 * 1024)
-        except Exception:
-            pass  # older bindings: limit unavailable
-        # NB: quickjs refuses Python callbacks while an engine time
-        # limit is set, and the Grayjay API is synchronous (http.GET
-        # returns a response, not a promise), so wall-clock bounding
-        # lives one layer up: network calls are bounded by the httpx
-        # timeout, and GrayjayProvider runs every plugin call in a
-        # worker thread it can abandon.
-        self.ctx.add_callable("__host_http", self._bridge_http)
-        self.ctx.add_callable("__host_log", self._bridge_log)
-        self.ctx.add_callable("__host_sleep", self._bridge_sleep)
-        self.ctx.add_callable("__host_uuid", lambda: str(uuid.uuid4()))
-        self.ctx.add_callable("__host_parse_url", self._bridge_parse_url)
+        self.engine = make_engine(engine, memory_limit_mb=memory_limit_mb)
+        self.ctx = self.engine
+        for name, fn in (
+            ("__host_http", self._bridge_http),
+            ("__host_log", self._bridge_log),
+            ("__host_sleep", self._bridge_sleep),
+            ("__host_uuid", lambda: str(uuid.uuid4())),
+            ("__host_parse_url", self._bridge_parse_url),
+            ("__host_md5", self._bridge_md5),
+            ("__host_b64encode", self._bridge_b64encode),
+            ("__host_b64decode", self._bridge_b64decode),
+        ):
+            self.engine.bind(name, fn)
 
-        self.ctx.eval(PRELUDE)
+        self.engine.eval(PRELUDE)
         try:
-            self.ctx.eval(script)
+            self.engine.eval(script)
         except Exception as e:
             raise PluginError(f"{config.name}: script failed to load: {e}") from e
 
@@ -167,13 +166,39 @@ class PluginHost:
                                "body": f"host request failed: {e}"})
 
     @staticmethod
+    def _bridge_md5(text: str) -> str:
+        return hashlib.md5(text.encode("utf-8", "surrogatepass")).hexdigest()
+
+    @staticmethod
+    def _bridge_b64encode(text: str) -> str:
+        return base64.b64encode(text.encode("utf-8", "surrogatepass")).decode()
+
+    @staticmethod
+    def _bridge_b64decode(text: str) -> str:
+        pad = "=" * (-len(text) % 4)
+        return base64.b64decode(text + pad).decode("utf-8", "replace")
+
+    @staticmethod
     def _bridge_parse_url(url: str, base: str = "") -> str:
         """WHATWG-ish URL parsing behind the prelude's URL class."""
         try:
             full = urljoin(base, url) if base else url
             p = urlsplit(full)
-            if not p.scheme or not p.netloc:
+            if not p.scheme:
                 return json.dumps({"ok": False})
+            if not p.netloc:
+                # Opaque-path URLs (about:blank, data:, blob:, javascript:)
+                # are valid WHATWG URLs with an empty host — JSDOM uses
+                # about:blank for its default document, so rejecting
+                # these breaks any plugin that bundles a DOM.
+                return json.dumps({
+                    "ok": True, "href": full, "protocol": f"{p.scheme}:",
+                    "hostname": "", "port": "", "host": "", "origin": "null",
+                    "pathname": p.path or "",
+                    "search": f"?{p.query}" if p.query else "",
+                    "hash": f"#{p.fragment}" if p.fragment else "",
+                    "username": "", "password": "",
+                })
             port = f":{p.port}" if p.port else ""
             host = (p.hostname or "") + port
             return json.dumps({
@@ -193,7 +218,7 @@ class PluginHost:
 
     def has(self, method: str) -> bool:
         try:
-            return bool(self.ctx.eval(f'__has_source_method("{method}")'))
+            return bool(self.engine.eval(f'__has_source_method("{method}")'))
         except Exception:
             return False
 
@@ -201,7 +226,7 @@ class PluginHost:
         """Invoke ``source.<method>(*args)``; returns marshalled JSON."""
         payload = json.dumps(list(args)).replace("\\", "\\\\").replace("'", "\\'")
         try:
-            out = self.ctx.eval(f"__call_source('{method}', '{payload}')")
+            out = self.engine.eval(f"__call_source('{method}', '{payload}')")
         except Exception as e:
             raise PluginError(f"{self.config.name}.{method}: {e}") from e
         if out is None:
@@ -237,9 +262,9 @@ class PluginHost:
         directly — Grayjay's host does this before any source.* call."""
         cfg = json.dumps(self.config.raw)
         st = json.dumps(settings)
-        self.ctx.add_callable("__ctx_config", lambda: cfg)
-        self.ctx.add_callable("__ctx_settings", lambda: st)
-        self.ctx.eval("__set_plugin_context(__ctx_config(), __ctx_settings())")
+        self.engine.bind("__ctx_config", lambda: cfg)
+        self.engine.bind("__ctx_settings", lambda: st)
+        self.engine.eval("__set_plugin_context(__ctx_config(), __ctx_settings())")
 
     def enable(self, settings: dict | None = None) -> None:
         """Grayjay calls source.enable(conf, settings, saveStateStr).
@@ -263,7 +288,15 @@ class PluginHost:
     def logs(self) -> list[str]:
         return list(self._log)
 
+    @property
+    def engine_name(self) -> str:
+        return self.engine.name
+
     def close(self) -> None:
+        try:
+            self.engine.close()
+        except Exception:
+            pass
         if self._own_client:
             try:
                 self._http.close()

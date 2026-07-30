@@ -16,6 +16,9 @@ network = ["httpx>=0.27"]
 # synchronous and quickjs is the Python engine that lets JS call back
 # into Python inside one call stack.
 grayjay = ["httpx>=0.27", "quickjs>=1.19"]
+# Opt-in V8 engine (engine="v8"). Parses plugins QuickJS can't, but the
+# current wheel has an ICU-init defect — see grayjay/engines.py.
+grayjay-v8 = ["httpx>=0.27", "quickjs>=1.19", "stpyv8>=13"]
 
 [tool.setuptools.packages.find]
 include = ["suite_providers*"]

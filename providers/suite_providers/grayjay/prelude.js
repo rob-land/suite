@@ -188,9 +188,16 @@ class BatchBuilder {
     }
     clientGET(client, url, headers, useAuth) { return this.GET(url, headers, useAuth); }
     clientPOST(client, url, body, headers, useAuth) { return this.POST(url, body, headers, useAuth); }
+    // A no-op slot that keeps result indices aligned when a plugin
+    // conditionally skips a request in a batch. Plugins feature-detect
+    // it (`!!batch.DUMMY`) to decide whether the host is modern enough
+    // for their newer code paths, so it must exist.
+    DUMMY() { this._ops.push(null); return this; }
     execute() {
         // Sequential is correct-if-slow; the host may parallelize later.
-        return this._ops.map(o => _request(o[0], o[1], o[2], o[3], o[4]));
+        return this._ops.map(o => o === null
+            ? new HttpResponse({ code: 0, headers: {}, body: "", url: "" })
+            : _request(o[0], o[1], o[2], o[3], o[4]));
     }
 }
 
@@ -219,18 +226,48 @@ const bridge = {
     buildVersion: () => 1,
     buildFlavor: () => "suite",
     getHardwareCodecs: () => [],
-    supportedFeatures: () => [],
+    // A property, not a method — plugins do `bridge.supportedFeatures ?? []`
+    // and then `.indexOf(...)` on it.
+    supportedFeatures: [],
     devSubmit: () => {},
     throwTimeout: () => { throw new TimeoutException("timeout"); },
 };
 const packageBridge = bridge;
 const log = bridge.log;
-const console = { log: bridge.log, warn: bridge.log, error: bridge.log, info: bridge.log };
 
+// Plugins reach for the full console surface (clear/assert/trace/table
+// and friends), and a missing method is a hard TypeError mid-extraction
+// rather than a degraded log line — so implement all of it.
+const console = {
+    log: bridge.log,
+    info: bridge.log,
+    debug: bridge.log,
+    warn: bridge.log,
+    error: bridge.log,
+    exception: bridge.log,
+    trace: bridge.log,
+    dir: (o) => bridge.log(JSON.stringify(o)),
+    table: (o) => bridge.log(JSON.stringify(o)),
+    clear: () => {},
+    group: () => {}, groupEnd: () => {}, groupCollapsed: () => {},
+    time: () => {}, timeEnd: () => {}, count: () => {},
+    firebug: false,
+    assert: (cond, ...rest) => {
+        if (!cond) { bridge.log("assert failed: " + rest.join(" ")); }
+    },
+};
+
+// Grayjay's "Utilities" package. md5String matters more than it looks:
+// the YouTube plugin hashes YouTube's player JS and asks FUTO's remote
+// solver for the matching signature-decryption solution, which is how it
+// avoids executing player code locally.
 const utility = {
+    md5String: (s) => __host_md5(String(s)),
+    toBase64: (s) => __host_b64encode(String(s)),
+    fromBase64: (s) => __host_b64decode(String(s)),
+    randomUUID: () => __host_uuid(),
     fromNow: (s) => 0,
     toHumanNumber: (n) => String(n),
-    randomUUID: () => __host_uuid(),
 };
 const packageUtilities = utility;
 

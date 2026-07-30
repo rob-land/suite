@@ -4,15 +4,15 @@ One class turns every Grayjay plugin the user installs into a backend
 for all the suite shells: couch's rails, zoetrope's glasses rails, and
 anything else driving ``suite_providers.aio``.
 
-Plugin calls are synchronous (QuickJS + blocking HTTP), so each one runs
-in a worker thread via ``asyncio.to_thread`` and the async interface
-stays honest. One plugin instance is single-threaded by construction: a
-lock serializes calls into its context.
+Plugin calls are synchronous (a JS engine + blocking HTTP), so each one
+runs off the event loop on a dedicated owner thread — one per plugin,
+because JS engines are thread-affine (a V8 isolate touched from a second
+thread segfaults). That also serializes calls into the engine for free.
 """
 from __future__ import annotations
 
 import asyncio
-import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from ..media import (
@@ -89,26 +89,32 @@ class GrayjayProvider:
     """
 
     def __init__(self, config: PluginConfig, script: str, *,
-                 settings: dict | None = None, call_timeout: float = 45.0):
+                 settings: dict | None = None, call_timeout: float = 45.0,
+                 engine: str = "auto"):
         self.config = config
         self.provider_id = f"grayjay:{config.id}"
         self.display_name = config.name
         self.source_id = self.provider_id
         self.source_display_name = config.name
         self._call_timeout = call_timeout
-        self._lock = threading.Lock()
-        self._host = PluginHost(config, script)
-        self._host.enable(settings)
+        # JS engines are thread-affine — a V8 isolate touched from a
+        # second thread segfaults — so one dedicated worker owns the
+        # engine for this plugin's whole lifetime: it is created there,
+        # every call runs there, and it is closed there.
+        self._pool = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix=f"grayjay-{config.id[:8]}")
+        self._host = self._pool.submit(
+            lambda: PluginHost(config, script, engine=engine)).result()
+        self._pool.submit(lambda: self._host.enable(settings)).result()
 
     # -- plumbing ---------------------------------------------------------
 
     async def _call(self, method: str, *args: Any) -> Any:
-        """Run a plugin method off the event loop, bounded."""
-        def run():
-            with self._lock:
-                return self._host.call(method, *args)
-        return await asyncio.wait_for(asyncio.to_thread(run),
-                                      timeout=self._call_timeout)
+        """Run a plugin method on its owner thread, off the event loop."""
+        loop = asyncio.get_running_loop()
+        fut = loop.run_in_executor(
+            self._pool, lambda: self._host.call(method, *args))
+        return await asyncio.wait_for(fut, timeout=self._call_timeout)
 
     def _to_item(self, v: dict) -> MediaItem:
         author = v.get("author") or {}
@@ -199,7 +205,11 @@ class GrayjayProvider:
         return None
 
     async def close(self) -> None:
-        self._host.close()
+        """Close the engine on its owner thread, then retire the pool."""
+        try:
+            self._pool.submit(self._host.close).result(timeout=10)
+        finally:
+            self._pool.shutdown(wait=False)
 
     @property
     def logs(self) -> list[str]:
