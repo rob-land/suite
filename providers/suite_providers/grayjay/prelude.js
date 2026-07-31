@@ -140,13 +140,39 @@ class HttpResponse {
     isOk() { return this.code >= 200 && this.code < 300; }
 }
 
-function _request(method, url, body, headers, useAuth, opts) {
+// Base64 helpers for the binary transport (the RPC channel is text).
+function _bytesToB64(bytes) {
+    let s = "";
+    for (let i = 0; i < bytes.length; i++) { s += String.fromCharCode(bytes[i]); }
+    return __host_b64encode_raw ? __host_b64encode_raw(s) : btoa(s);
+}
+function _b64ToBytes(b64) {
+    const s = __host_b64decode_raw ? __host_b64decode_raw(b64) : atob(b64);
+    const out = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) { out[i] = s.charCodeAt(i) & 0xff; }
+    return out;
+}
+
+/**
+ * `binary` is Grayjay's 5th http argument: the request body is raw bytes
+ * and the response body must come back as bytes, not text. YouTube's UMP
+ * streaming uses it for everything, and decoding those responses as
+ * UTF-8 silently corrupts them.
+ */
+function _request(method, url, body, headers, useAuth, binary) {
+    const isBytes = body && typeof body === "object" &&
+                    typeof body.length === "number" &&
+                    typeof body !== "string";
     const raw = __host_http(JSON.stringify({
-        method: method, url: url, body: body === undefined ? null : body,
+        method: method, url: url,
+        body: isBytes ? _bytesToB64(body) : (body === undefined ? null : body),
+        bodyIsBase64: !!isBytes,
         headers: headers || {}, useAuth: !!useAuth,
-        options: opts || {},
+        binary: !!binary,
     }));
-    return new HttpResponse(JSON.parse(raw));
+    const parsed = JSON.parse(raw);
+    if (parsed.bodyIsBase64) { parsed.body = _b64ToBytes(parsed.body || ""); }
+    return new HttpResponse(parsed);
 }
 
 class HttpClient {
@@ -156,23 +182,25 @@ class HttpClient {
     setDoApplyCookies() { return this; }
     setDoAllowNewCookies() { return this; }
     clearCookies() { return this; }
-    GET(url, headers, useAuth) {
+    GET(url, headers, useAuth, binary) {
         return _request("GET", url, undefined,
                         Object.assign({}, this._headers, headers || {}),
-                        useAuth === undefined ? this._useAuth : useAuth);
+                        useAuth === undefined ? this._useAuth : useAuth, binary);
     }
-    POST(url, body, headers, useAuth) {
+    POST(url, body, headers, useAuth, binary) {
         return _request("POST", url, body,
                         Object.assign({}, this._headers, headers || {}),
-                        useAuth === undefined ? this._useAuth : useAuth);
+                        useAuth === undefined ? this._useAuth : useAuth, binary);
     }
-    request(method, url, headers, useAuth) {
+    request(method, url, headers, useAuth, binary) {
         return _request(method, url, undefined,
-                        Object.assign({}, this._headers, headers || {}), useAuth);
+                        Object.assign({}, this._headers, headers || {}),
+                        useAuth, binary);
     }
-    requestWithBody(method, url, body, headers, useAuth) {
+    requestWithBody(method, url, body, headers, useAuth, binary) {
         return _request(method, url, body,
-                        Object.assign({}, this._headers, headers || {}), useAuth);
+                        Object.assign({}, this._headers, headers || {}),
+                        useAuth, binary);
     }
     // Plugins fetch these to reuse the host's identity; we have none.
     static fromAuth() { return new HttpClient(true); }
@@ -180,8 +208,8 @@ class HttpClient {
 
 class BatchBuilder {
     constructor() { this._ops = []; }
-    GET(url, headers, useAuth) { this._ops.push(["GET", url, undefined, headers, useAuth]); return this; }
-    POST(url, body, headers, useAuth) { this._ops.push(["POST", url, body, headers, useAuth]); return this; }
+    GET(url, headers, useAuth, binary) { this._ops.push(["GET", url, undefined, headers, useAuth, binary]); return this; }
+    POST(url, body, headers, useAuth, binary) { this._ops.push(["POST", url, body, headers, useAuth, binary]); return this; }
     request(method, url, headers, useAuth) { this._ops.push([method, url, undefined, headers, useAuth]); return this; }
     requestWithBody(method, url, body, headers, useAuth) {
         this._ops.push([method, url, body, headers, useAuth]); return this;
@@ -197,17 +225,19 @@ class BatchBuilder {
         // Sequential is correct-if-slow; the host may parallelize later.
         return this._ops.map(o => o === null
             ? new HttpResponse({ code: 0, headers: {}, body: "", url: "" })
-            : _request(o[0], o[1], o[2], o[3], o[4]));
+            : _request(o[0], o[1], o[2], o[3], o[4], o[5]));
     }
 }
 
 const http = {
-    GET: (url, headers, useAuth) => _request("GET", url, undefined, headers, useAuth),
-    POST: (url, body, headers, useAuth) => _request("POST", url, body, headers, useAuth),
-    request: (method, url, headers, useAuth) =>
-        _request(method, url, undefined, headers, useAuth),
-    requestWithBody: (method, url, body, headers, useAuth) =>
-        _request(method, url, body, headers, useAuth),
+    GET: (url, headers, useAuth, binary) =>
+        _request("GET", url, undefined, headers, useAuth, binary),
+    POST: (url, body, headers, useAuth, binary) =>
+        _request("POST", url, body, headers, useAuth, binary),
+    request: (method, url, headers, useAuth, binary) =>
+        _request(method, url, undefined, headers, useAuth, binary),
+    requestWithBody: (method, url, body, headers, useAuth, binary) =>
+        _request(method, url, body, headers, useAuth, binary),
     newClient: (useAuth) => new HttpClient(useAuth),
     getDefaultClient: (useAuth) => new HttpClient(useAuth),
     batch: () => new BatchBuilder(),

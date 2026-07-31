@@ -72,7 +72,17 @@ function observeSession(request) {
 globalThis.__host_http = (requestJson) => {
   const request = JSON.parse(requestJson);
   observeSession(request);
-  return httpSync(request);
+  if (process.env.GJ_TRACE_BIN && /videoplayback|googlevideo/.test(request.url || "")) {
+    globalThis.__host_log(`[bin-trace] ${request.method} binary=${request.binary} ` +
+      `bodyIsBase64=${request.bodyIsBase64} url=${String(request.url).slice(0, 60)}`);
+  }
+  const out = httpSync(request);
+  if (process.env.GJ_TRACE_BIN && /videoplayback|googlevideo/.test(request.url || "")) {
+    const p = JSON.parse(out);
+    globalThis.__host_log(`[bin-trace] <- code=${p.code} bodyIsBase64=${p.bodyIsBase64} ` +
+      `bodyType=${typeof p.body} len=${(p.body || "").length}`);
+  }
+  return out;
 };
 globalThis.__host_log = (message) => {
   logs.push(String(message).slice(0, 2000));
@@ -88,6 +98,12 @@ globalThis.__host_md5 = (s) =>
   createHash("md5").update(String(s), "utf8").digest("hex");
 globalThis.__host_b64encode = (s) => Buffer.from(String(s), "utf8").toString("base64");
 globalThis.__host_b64decode = (s) => Buffer.from(String(s), "base64").toString("utf8");
+// Byte-exact variants for the binary transport: latin1 maps each byte
+// to one code unit, so no UTF-8 re-encoding mangles the payload.
+globalThis.__host_b64encode_raw = (s) =>
+  Buffer.from(String(s), "latin1").toString("base64");
+globalThis.__host_b64decode_raw = (s) =>
+  Buffer.from(String(s), "base64").toString("latin1");
 globalThis.__host_parse_url = (url, base) => {
   try {
     const u = base ? new URL(url, base) : new URL(url);
@@ -136,6 +152,38 @@ function reply(payload) {
   process.stdout.write(JSON.stringify(payload) + "\n");
 }
 
+// Sources whose methods must outlive the RPC hop. JSON marshalling
+// drops functions, so a source that can build its own manifest
+// (`generate()` — how YouTube's UMP sources stream) would arrive in
+// Python as inert data. Keep the live object here and hand Python a
+// handle it can call back with.
+const liveSources = new Map();
+let liveSeq = 0;
+
+function marshal(value) {
+  const seen = new WeakSet();
+  const walk = (v) => {
+    if (v === null || typeof v !== "object") {
+      return typeof v === "function" ? undefined : v;
+    }
+    if (seen.has(v)) return undefined;      // plugins build cyclic contexts
+    seen.add(v);
+    if (Array.isArray(v)) return v.map(walk);
+    const out = {};
+    for (const key of Object.keys(v)) {
+      const child = walk(v[key]);
+      if (child !== undefined) out[key] = child;
+    }
+    if (typeof v.generate === "function") {
+      const id = `live-${++liveSeq}`;
+      liveSources.set(id, v);
+      out.__liveId = id;
+    }
+    return out;
+  };
+  return walk(value ?? null) ?? null;
+}
+
 async function handle(msg) {
   const source = pluginContext();
   try {
@@ -173,11 +221,22 @@ async function handle(msg) {
       }
       // Some newer paths (the YouTube session client) are async.
       const out = await fn.apply(source, msg.args || []);
-      return {
-        ok: true,
-        result: JSON.parse(JSON.stringify(out ?? null, (k, v) =>
-          (typeof v === "function" ? undefined : v))),
-      };
+      return { ok: true, result: marshal(out) };
+    }
+    if (msg.method === "generate") {
+      // Ask the plugin to build a playable manifest for a source it
+      // returned earlier. YouTube's UMP sources do their streaming right
+      // here, inside the plugin's own session — which is exactly why
+      // this path works where an independent SABR session is refused.
+      const live = liveSources.get(msg.liveId);
+      if (!live) return { ok: false, error: `unknown source ${msg.liveId}` };
+      if (typeof live.generate !== "function") {
+        return { ok: false, error: "source has no generate()" };
+      }
+      const dash = await live.generate();
+      const modifier = typeof live.getRequestModifier === "function"
+        ? marshal(live.getRequestModifier()) : null;
+      return { ok: true, result: { dash: marshal(dash), modifier } };
     }
     return { ok: false, error: `unknown method ${msg.method}` };
   } catch (e) {

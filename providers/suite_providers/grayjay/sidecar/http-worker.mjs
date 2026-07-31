@@ -82,18 +82,35 @@ parentPort.on("message", async (req) => {
       const cookie = cookieHeader(new URL(url).hostname);
       if (cookie && !headers.Cookie && !headers.cookie) headers.Cookie = cookie;
     }
+    // Binary bodies travel as base64 over the (text) bridge. UMP
+    // streaming is binary in both directions, and reading those
+    // responses as UTF-8 corrupts them beyond recovery.
+    const body = req.bodyIsBase64
+      ? Buffer.from(String(req.body || ""), "base64")
+      : (req.body ?? undefined);
     const res = await fetch(url, {
       method: req.method || "GET",
       headers,
-      body: req.body ?? undefined,
+      body,
       redirect: "follow",
     });
     const host = new URL(res.url || url).hostname;
     storeCookies(host, res.headers.getSetCookie?.() ?? []);
     const out = {};
     for (const [k, v] of res.headers) out[k.toLowerCase()] = v;
-    reply({ code: res.status, headers: out, body: await res.text(), url: res.url || url });
+    if (req.binary) {
+      const bytes = Buffer.from(await res.arrayBuffer());
+      reply({ code: res.status, headers: out, bodyIsBase64: true,
+              body: bytes.toString("base64"), url: res.url || url });
+    } else {
+      reply({ code: res.status, headers: out, body: await res.text(),
+              url: res.url || url });
+    }
   } catch (e) {
     reply({ code: 0, headers: {}, body: `host request failed: ${e}`, url });
   }
 });
+
+// NB: error responses are returned as text even for binary requests, so
+// a plugin inspecting a failure body sees a readable message rather than
+// base64. Plugins branch on `typeof body`, which keeps that safe.
