@@ -167,3 +167,38 @@ def test_plugin_config_parses_metadata():
     assert cfg.version == 3
     assert cfg.allow_urls == ("example.com",)
     assert cfg.allow_eval is False
+
+
+# --- node sidecar -----------------------------------------------------------
+
+def test_sidecar_runs_a_plugin_when_node_is_present():
+    """The sidecar exposes the same surface as the in-process host."""
+    from suite_providers.grayjay.sidecar import SidecarPlugin, node_available
+
+    if not node_available():
+        pytest.skip("node 18+ not installed")
+    p = SidecarPlugin(PluginConfig.from_dict(CONFIG), SCRIPT)
+    try:
+        p.enable()
+        assert p.engine_name == "node"
+        assert p.has("getHome") and not p.has("nopeNotHere")
+        home = p.call("getHome")
+        assert home["results"][0]["name"] == "Item One"
+        # plugin.config.constants reaches the plugin in the sidecar too
+        assert home["results"][0]["url"] == "https://example.com/v1"
+        # typed settings defaults survive the RPC hop
+        seen = p.call("settingsSeen")
+        assert seen["useFoo"] is True and seen["mode"] == 2
+        # allowUrls is enforced inside the sidecar's HTTP worker
+        assert p.call("blocked") == 403
+    finally:
+        p.close()
+
+
+def test_sidecar_reports_missing_node_clearly():
+    from suite_providers.grayjay.host import PluginError
+    from suite_providers.grayjay.sidecar import SidecarPlugin
+
+    with pytest.raises(PluginError, match="Node 18"):
+        SidecarPlugin(PluginConfig.from_dict(CONFIG), SCRIPT,
+                      node="/nonexistent/node")

@@ -23,7 +23,7 @@ from ..media import (
 )
 from ..models import StereoConfidence, StereoFormat, StereoHint
 from ..naming import video_stereo_hint
-from .host import PluginConfig, PluginHost
+from .host import PluginConfig, PluginError, PluginHost
 
 #: Source kinds we can hand to mpv directly, best first.
 _STREAM_PRIORITY = ("HLSSource", "DashSource", "VideoUrlSource",
@@ -79,6 +79,28 @@ def _thumbnail(item: dict) -> str | None:
     return None
 
 
+def _make_host(config: PluginConfig, script: str, engine: str):
+    """In-process engine, or the Node sidecar.
+
+    ``engine="auto"`` prefers Node when it is installed: it is the only
+    engine that runs every plugin (YouTube's bundled JSDOM and its
+    runtime-built signature decryptor defeat the embeddable ones). It
+    falls back to an in-process engine otherwise, which is plenty for
+    API-shaped plugins like PeerTube and Odysee.
+    """
+    from .sidecar import SidecarPlugin, node_available
+
+    if engine == "node":
+        return SidecarPlugin(config, script)
+    if engine == "auto" and node_available():
+        try:
+            return SidecarPlugin(config, script)
+        except PluginError:
+            pass          # fall through to an in-process engine
+    return PluginHost(config, script,
+                      engine="auto" if engine == "auto" else engine)
+
+
 class GrayjayProvider:
     """Adapts one loaded plugin to the suite's provider surface.
 
@@ -104,7 +126,7 @@ class GrayjayProvider:
         self._pool = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix=f"grayjay-{config.id[:8]}")
         self._host = self._pool.submit(
-            lambda: PluginHost(config, script, engine=engine)).result()
+            lambda: _make_host(config, script, engine)).result()
         self._pool.submit(lambda: self._host.enable(settings)).result()
 
     # -- plumbing ---------------------------------------------------------

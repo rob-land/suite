@@ -238,7 +238,8 @@ const log = bridge.log;
 // Plugins reach for the full console surface (clear/assert/trace/table
 // and friends), and a missing method is a hard TypeError mid-extraction
 // rather than a degraded log line — so implement all of it.
-const console = {
+const __console = (typeof console !== "undefined" && console) ? console : {};
+const __hostConsole = {
     log: bridge.log,
     info: bridge.log,
     debug: bridge.log,
@@ -256,6 +257,12 @@ const console = {
         if (!cond) { bridge.log("assert failed: " + rest.join(" ")); }
     },
 };
+// Fill only what the host engine lacks; plugins call clear/assert/
+// trace/table and a missing one is a hard TypeError mid-extraction.
+for (const k of Object.keys(__hostConsole)) {
+    if (typeof __console[k] === "undefined") { __console[k] = __hostConsole[k]; }
+}
+globalThis.console = __console;
 
 // Grayjay's "Utilities" package. md5String matters more than it looks:
 // the YouTube plugin hashes YouTube's player JS and asks FUTO's remote
@@ -275,6 +282,7 @@ const packageUtilities = utility;
 // QuickJS ships no URL/URLSearchParams; plugins use both freely.
 // Parsing is delegated to Python's urllib so it matches the host's own
 // view of a URL (the same view allowUrls is enforced against).
+if (typeof URLSearchParams === "undefined") {
 class URLSearchParams {
     constructor(init) {
         this._p = [];
@@ -306,6 +314,10 @@ class URLSearchParams {
     }
 }
 
+globalThis.URLSearchParams = URLSearchParams;
+}
+
+if (typeof URL === "undefined") {
 class URL {
     constructor(url, base) {
         const parsed = JSON.parse(__host_parse_url(String(url),
@@ -327,6 +339,8 @@ class URL {
     toString() { return this.href; }
     toJSON() { return this.href; }
 }
+globalThis.URL = URL;
+}
 
 // --- timers -----------------------------------------------------------
 // QuickJS has no event loop and the Grayjay API is synchronous, so
@@ -334,6 +348,7 @@ class URL {
 // matches how plugins use it (deferring/retry backoff inside one call).
 // setInterval would never terminate, so it registers and never fires.
 let __timer_seq = 1;
+if (typeof setTimeout === "undefined") {
 function setTimeout(fn, ms) {
     const id = __timer_seq++;
     if (typeof fn === "function") {
@@ -345,7 +360,16 @@ function setTimeout(fn, ms) {
 function clearTimeout(id) {}
 function setInterval(fn, ms) { return __timer_seq++; }
 function clearInterval(id) {}
-function queueMicrotask(fn) { try { fn(); } catch (e) { bridge.log("" + e); } }
+globalThis.setTimeout = setTimeout;
+globalThis.clearTimeout = clearTimeout;
+globalThis.setInterval = setInterval;
+globalThis.clearInterval = clearInterval;
+}
+if (typeof queueMicrotask === "undefined") {
+    globalThis.queueMicrotask = function (fn) {
+        try { fn(); } catch (e) { bridge.log("" + e); }
+    };
+}
 
 // --- host classes plugins subclass -------------------------------------
 // Grayjay exposes these for playback progress reporting and per-request
