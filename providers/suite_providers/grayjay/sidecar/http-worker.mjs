@@ -118,7 +118,11 @@ parentPort.on("message", async (req) => {
               url: res.url || url });
     }
   } catch (e) {
-    reply({ code: 0, headers: {}, body: `host request failed: ${e}`, url });
+    // Surface the cause: fetch collapses everything into "fetch failed"
+    // and the real reason (protocol, TLS, body type) hides underneath.
+    const cause = e?.cause ? ` | cause: ${e.cause?.message || e.cause}` : "";
+    reply({ code: 0, headers: {},
+            body: `host request failed: ${e}${cause}`, url });
   }
 });
 

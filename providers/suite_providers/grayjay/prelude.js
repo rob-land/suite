@@ -137,7 +137,12 @@ class HttpResponse {
         this.code = raw.code; this.headers = raw.headers || {};
         this.body = raw.body; this.url = raw.url;
     }
-    isOk() { return this.code >= 200 && this.code < 300; }
+    // A boolean *property*, not a method: every one of the 111 uses
+    // across the YouTube, PeerTube and Odysee plugins reads `resp.isOk`
+    // bare. As a method it is a function object — always truthy — so
+    // `if (!resp.isOk) throw` never fires and plugins march on parsing
+    // error bodies as if they were data.
+    get isOk() { return this.code >= 200 && this.code < 300; }
 }
 
 // Base64 helpers for the binary transport (the RPC channel is text).
