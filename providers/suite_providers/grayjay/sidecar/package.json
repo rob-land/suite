@@ -1,0 +1,9 @@
+{
+  "name": "suite-grayjay-sidecar",
+  "private": true,
+  "type": "module",
+  "description": "Node sidecar running Grayjay plugins; googlevideo bridges YouTube's SABR/UMP streams to ordinary players.",
+  "dependencies": {
+    "googlevideo": "^4.1.1"
+  }
+}

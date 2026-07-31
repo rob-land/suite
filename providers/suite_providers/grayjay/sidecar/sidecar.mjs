@@ -51,7 +51,29 @@ function httpSync(request) {
 
 // --- host bridges the prelude expects ---------------------------------
 const logs = [];
-globalThis.__host_http = (requestJson) => httpSync(JSON.parse(requestJson));
+
+// SABR sessions need the Proof-of-Origin token, and plugins don't put it
+// on the source objects they return — but they do send it to YouTube in
+// their own player requests, which pass through this bridge. Observing
+// what already flows through the host is enough; no plugin change.
+const session = { poToken: null, visitorData: null };
+const PO_TOKEN_RE = /"poToken"\s*:\s*"([^"]{20,})"/;
+const VISITOR_RE = /"visitorData"\s*:\s*"([^"]{20,})"/;
+
+function observeSession(request) {
+  const body = typeof request.body === "string" ? request.body : "";
+  if (!body) return;
+  const po = PO_TOKEN_RE.exec(body);
+  if (po) session.poToken = po[1];
+  const vd = VISITOR_RE.exec(body);
+  if (vd) session.visitorData = vd[1];
+}
+
+globalThis.__host_http = (requestJson) => {
+  const request = JSON.parse(requestJson);
+  observeSession(request);
+  return httpSync(request);
+};
 globalThis.__host_log = (message) => {
   logs.push(String(message).slice(0, 2000));
   if (logs.length > 200) logs.splice(0, logs.length - 200);
@@ -125,6 +147,25 @@ async function handle(msg) {
         JSON.stringify(msg.config ?? config), JSON.stringify(msg.settings ?? {}));
       return { ok: true, result: true };
     }
+    if (msg.method === "sessionfull") {
+      return { ok: true, result: { poToken: session.poToken,
+                                   visitorData: session.visitorData } };
+    }
+    if (msg.method === "session") {
+      return { ok: true, result: {
+        poToken: session.poToken ? session.poToken.slice(0, 24) + "..." : null,
+        poTokenLen: session.poToken ? session.poToken.length : 0,
+        visitorData: !!session.visitorData } };
+    }
+    if (msg.method === "sabr") {
+      // Republish a SABR/UMP source as loopback HTTP for a normal player.
+      const { serveSabr } = await import("./sabr.mjs");
+      const served = await serveSabr(msg.source, { session });
+      sabrSessions.push(served);
+      return { ok: true, result: { videoUrl: served.videoUrl,
+                                   audioUrl: served.audioUrl,
+                                   port: served.port } };
+    }
     if (msg.method === "call") {
       const fn = source?.[msg.name];
       if (typeof fn !== "function") {
@@ -144,6 +185,9 @@ async function handle(msg) {
   }
 }
 
+// Live SABR servers, closed when the sidecar shuts down.
+const sabrSessions = [];
+
 const rl = createInterface({ input: process.stdin });
 let queue = Promise.resolve();
 rl.on("line", (line) => {
@@ -161,6 +205,9 @@ rl.on("line", (line) => {
     reply({ id: msg.id, ...out, logs: taken });
   });
 });
-rl.on("close", () => process.exit(0));
+rl.on("close", async () => {
+  await Promise.allSettled(sabrSessions.map((s) => s.close()));
+  process.exit(0);
+});
 
 reply({ id: 0, ok: true, result: "ready", logs: [] });
