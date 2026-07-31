@@ -80,7 +80,8 @@ globalThis.__host_http = (requestJson) => {
   if (process.env.GJ_TRACE_BIN && /videoplayback|googlevideo/.test(request.url || "")) {
     const p = JSON.parse(out);
     globalThis.__host_log(`[bin-trace] <- code=${p.code} bodyIsBase64=${p.bodyIsBase64} ` +
-      `bodyType=${typeof p.body} len=${(p.body || "").length}`);
+      `bodyType=${typeof p.body} len=${(p.body || "").length} ` +
+      `body=${String(p.body || "").replace(/\s+/g, " ").slice(0, 300)}`);
   }
   return out;
 };
@@ -238,14 +239,26 @@ async function handle(msg) {
         ? marshal(live.getRequestModifier()) : null;
       return { ok: true, result: { dash: marshal(dash), modifier } };
     }
+    if (msg.method === "serve") {
+      // Publish a source as a playable DASH URL on loopback: we stand in
+      // for grayjay.internal and answer segment requests by calling the
+      // plugin's own request executor.
+      const live = liveSources.get(msg.liveId);
+      if (!live) return { ok: false, error: `unknown source ${msg.liveId}` };
+      const { serveDash } = await import("./dashproxy.mjs");
+      const served = await serveDash(live);
+      dashServers.push(served);
+      return { ok: true, result: { url: served.url, port: served.port } };
+    }
     return { ok: false, error: `unknown method ${msg.method}` };
   } catch (e) {
     return { ok: false, error: String(e?.stack || e) };
   }
 }
 
-// Live SABR servers, closed when the sidecar shuts down.
+// Live media servers, closed when the sidecar shuts down.
 const sabrSessions = [];
+const dashServers = [];
 
 const rl = createInterface({ input: process.stdin });
 let queue = Promise.resolve();
@@ -265,7 +278,8 @@ rl.on("line", (line) => {
   });
 });
 rl.on("close", async () => {
-  await Promise.allSettled(sabrSessions.map((s) => s.close()));
+  await Promise.allSettled(
+    [...sabrSessions, ...dashServers].map((s) => s.close()));
   process.exit(0);
 });
 

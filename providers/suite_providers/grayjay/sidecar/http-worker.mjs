@@ -53,7 +53,12 @@ function hostAllowed(url) {
   try {
     const host = new URL(url).hostname.toLowerCase();
     return allowUrls.some((rule) => {
-      const r = String(rule).toLowerCase().replace(/^https?:\/\//, "").split("/")[0];
+      // A leading dot is the cookie-domain spelling of "this domain and
+      // its subdomains" — YouTube's config uses it for the media CDN
+      // (".googlevideo.com"). Strip it, or the suffix test builds an
+      // impossible "..googlevideo.com" and silently blocks playback.
+      const r = String(rule).toLowerCase()
+        .replace(/^https?:\/\//, "").split("/")[0].replace(/^\./, "");
       return r === "everywhere" || r === "*" || host === r || host.endsWith("." + r);
     });
   } catch {
@@ -88,6 +93,12 @@ parentPort.on("message", async (req) => {
     const body = req.bodyIsBase64
       ? Buffer.from(String(req.body || ""), "base64")
       : (req.body ?? undefined);
+    if (req.bodyIsBase64 && !headers["Content-Type"] && !headers["content-type"]) {
+      // fetch() would otherwise stamp text/plain;charset=UTF-8 on a
+      // Buffer body, which servers expecting protobuf (YouTube's UMP
+      // endpoints) reject outright.
+      headers["Content-Type"] = "application/x-protobuf";
+    }
     const res = await fetch(url, {
       method: req.method || "GET",
       headers,

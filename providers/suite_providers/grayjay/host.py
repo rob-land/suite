@@ -87,7 +87,10 @@ def host_allowed(host: str, allow_urls: tuple[str, ...]) -> bool:
         rule = rule.lower().strip()
         if rule in ("everywhere", "*"):
             return True
-        rule = rule.split("://")[-1].split("/")[0]
+        # A leading dot means "domain and subdomains" (cookie-domain
+        # spelling); YouTube's config uses it for the media CDN.
+        # Without stripping it the suffix test can never match.
+        rule = rule.split("://")[-1].split("/")[0].lstrip(".")
         if host == rule or host.endswith("." + rule):
             return True
     return False
