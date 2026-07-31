@@ -22,3 +22,13 @@ grayjay-v8 = ["httpx>=0.27", "quickjs>=1.19", "stpyv8>=13"]
 
 [tool.setuptools.packages.find]
 include = ["suite_providers*"]
+
+# The JS runtime and the Node sidecar are data, not modules — without
+# this they are missing from any wheel/site-packages install and the
+# Grayjay host fails at import time.
+[tool.setuptools.package-data]
+suite_providers = [
+    "grayjay/prelude.js",
+    "grayjay/sidecar/*.mjs",
+    "grayjay/sidecar/package.json",
+]
