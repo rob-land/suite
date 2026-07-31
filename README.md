@@ -39,4 +39,18 @@ kind, with stereo-3D awareness end to end:
 cd providers && python3 -m pytest tests/
 ```
 
-License: GPL-3.0-or-later.
+### Plugin ecosystems
+
+- `suite_providers/grayjay/` — runs **Grayjay** plugins (JavaScript;
+  QuickJS in-process, or a Node sidecar for the heavier ones). Working
+  for PeerTube and Odysee end to end; YouTube browses and searches.
+- `suite_providers/kodi_research/` — a **research spike** (not shipped)
+  proving Kodi video addons browse and resolve from plain Python with no
+  Kodi installed. See its README for the plugin contract, the scope
+  (broadcaster catalogues yes, Widevine never), and the licensing
+  constraint that shapes any real implementation: ~26 of 177 official
+  video addons are GPL-2.0-only, so a Kodi host module should itself be
+  GPL-2.0-or-later and run addons out-of-process.
+
+License: GPL-3.0-or-later (the Kodi host module, if built, should be
+GPL-2.0-or-later — see `kodi_research/README.md`).
