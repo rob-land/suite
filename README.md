@@ -5,6 +5,11 @@ glasses spatial shell), **couch** (10-foot TV shell), **hearth** (smart
 display). Design rationale lives in the zoetrope repo:
 `docs/16-suite-design-language.md` and `docs/17-zoetrope-ui-spec.md`.
 
+As of 2026-08-01, couch's UI is also the planned media interface
+*inside* zoetrope (projected onto a spatial panel; doc 17 §8c and
+couch's `docs/hosted-by-zoetrope.md`) — the rails/browse surface is
+built once, in couch, rather than per shell.
+
 ## tokens/
 
 One YAML source of truth (`tokens.yaml`) → generated, vendorable outputs
