@@ -123,6 +123,21 @@ class SidecarPlugin:
     def call(self, method: str, *args: Any) -> Any:
         return self._rpc(method="call", name=method, args=list(args))
 
+    def serve(self, live_id: str) -> str:
+        """Publish a source as a local DASH URL any player can open.
+
+        Some sources — YouTube's, notably — carry no directly playable
+        URL: the plugin streams them itself, and the manifest it builds
+        points at ``grayjay.internal``. We stand in for that host, so the
+        media keeps flowing through the plugin's own session, which is
+        the only session the server will serve it to.
+
+        Only the sidecar can do this; the in-process engines have no
+        event loop to run the plugin's asynchronous playback path.
+        """
+        out = self._rpc(method="serve", liveId=live_id)
+        return (out or {}).get("url")
+
     def default_settings(self) -> dict:
         out: dict[str, Any] = {}
         for entry in self.config.settings:

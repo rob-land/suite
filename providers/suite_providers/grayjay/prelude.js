@@ -263,7 +263,14 @@ const bridge = {
     getHardwareCodecs: () => [],
     // A property, not a method — plugins do `bridge.supportedFeatures ?? []`
     // and then `.indexOf(...)` on it.
-    supportedFeatures: [],
+    //
+    // The list is the host declaring what it can honour, so it comes from
+    // the host rather than being fixed here: "Async" means a plugin may
+    // return a Promise from a source method and we will await it, which
+    // holds on Node but not on QuickJS, where there is no event loop and
+    // a timer set inside a plugin call would never fire.
+    supportedFeatures:
+        (typeof __host_features !== "undefined" && __host_features) || [],
     devSubmit: () => {},
     throwTimeout: () => { throw new TimeoutException("timeout"); },
 };

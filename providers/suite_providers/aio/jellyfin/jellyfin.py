@@ -27,6 +27,7 @@ import httpx
 
 from ...media import Capability
 from ..base import MediaProvider, ProviderError
+from ..base import AuthKind
 from ._auth import AuthMixin
 from ._http import HttpMixin
 from ._items import ItemsMixin
@@ -48,6 +49,7 @@ class JellyfinProvider(
 ):
     provider_id = "jellyfin"
     display_name = "Jellyfin"
+    auth_kind = AuthKind.QUICK_CONNECT
 
     def __init__(self) -> None:
         super().__init__()

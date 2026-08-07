@@ -44,6 +44,9 @@ export async function serveDash(source, { host = "127.0.0.1" } = {}) {
       }
       // Anything else is a media request: hand the executor the URL it
       // minted, in the form it expects.
+      if (process.env.GJ_TRACE_DASH) {
+        globalThis.__host_log?.(`[dash] -> ${path.slice(0, 80)}`);
+      }
       const internalUrl = "https://grayjay.internal" + path;
       const out = await executor.executeRequest(internalUrl, {});
       const bytes = toBuffer(out);
@@ -57,6 +60,10 @@ export async function serveDash(source, { host = "127.0.0.1" } = {}) {
       });
       res.end(bytes);
     } catch (e) {
+      // Players report a failed fragment without its reason, so a silent
+      // 500 here is undiagnosable from the outside: say what happened.
+      globalThis.__host_log?.(
+        `[dash] ${path.slice(0, 80)} failed: ${e?.message || e}`);
       res.writeHead(500).end(String(e?.message || e));
     }
   });

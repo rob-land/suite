@@ -219,8 +219,34 @@ class GrayjayProvider:
         for key, value in (source.get("requestModifier") or {}).items():
             if key == "headers" and isinstance(value, dict):
                 headers.update(value)
-        return StreamInfo(url=source["url"], mpv_options=opts,
-                          headers=headers, stereo=item.stereo)
+        return StreamInfo(url=await self._playable_url(source, item),
+                          mpv_options=opts, headers=headers,
+                          stereo=item.stereo)
+
+    async def _playable_url(self, source: dict, item: MediaItem) -> str:
+        """The URL to hand a player, proxying the source if it needs it.
+
+        A ``DashManifestRawSource`` names itself accurately: the plugin
+        builds the manifest, and the source's own ``url`` is a media
+        endpoint no player can open on its own — YouTube's is a SABR
+        endpoint that speaks a protocol mpv has never heard of. For those
+        we publish a local DASH URL and let the plugin do the streaming,
+        inside the session the server actually accepts.
+        """
+        live_id = source.get("__liveId")
+        serve = getattr(self._host, "serve", None)
+        if source.get("plugin_type") != "DashManifestRawSource" or not live_id:
+            return source["url"]
+        if serve is None:
+            raise RuntimeError(
+                f"{item.title} needs the plugin to stream it, which requires "
+                f"the Node sidecar (engine={self._host.engine_name})")
+        loop = asyncio.get_running_loop()
+        fut = loop.run_in_executor(self._pool, lambda: serve(live_id))
+        url = await asyncio.wait_for(fut, timeout=self._call_timeout)
+        if not url:
+            raise RuntimeError(f"{item.title}: plugin served no manifest")
+        return url
 
     async def report_progress(self, item, position_seconds, credentials=None,
                               completed: bool = False) -> None:

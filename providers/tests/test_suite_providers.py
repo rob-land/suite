@@ -91,3 +91,28 @@ def test_local_photo_pairs_and_mpo(tmp_path):
     assert pair.stereo.format is StereoFormat.STEREO_PAIR
     assert pair.right_source and pair.right_source.path.endswith("trip_r.jpg")
     assert lib.original_bytes(items["beach"]).startswith(b"\xff\xd8")
+
+
+# --- AuthKind ------------------------------------------------------------
+# Sign-in is a provider capability, not a universal. A shell that assumes
+# every source has an account offers a dead-end sign-in button for plugin
+# feeds — and if it also assumes one scheme, opens the wrong provider's
+# dialog entirely (couch showed Jellyfin Quick Connect for a PeerTube
+# source, 2026-08-06).
+
+
+def test_auth_kind_defaults_to_password():
+    from suite_providers.aio.base import AuthKind, MediaProvider
+    assert MediaProvider.auth_kind is AuthKind.PASSWORD
+
+
+def test_jellyfin_uses_quick_connect():
+    from suite_providers.aio.base import AuthKind
+    from suite_providers.aio.jellyfin import JellyfinProvider
+    assert JellyfinProvider.auth_kind is AuthKind.QUICK_CONNECT
+
+
+def test_auth_kind_values_are_stable():
+    # Shells persist and compare these as plain strings.
+    from suite_providers.aio.base import AuthKind
+    assert {k.value for k in AuthKind} == {"none", "password", "quick_connect"}

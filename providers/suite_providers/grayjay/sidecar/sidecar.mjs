@@ -94,6 +94,16 @@ globalThis.__host_sleep = (ms) => {
   const until = Date.now() + Math.min(Number(ms) || 0, 5000);
   while (Date.now() < until) { /* spin */ }
 };
+// What this host can honour (bridge.supportedFeatures; see prelude.js).
+//
+// "Async": a plugin method may return a Promise and we will await it.
+// This is what makes YouTube play. Its first playback request always
+// comes back as a handshake — a SABR context update and a backoff
+// policy, no media — and the plugin's answer is to wait the requested
+// interval, re-send with the context it was just given, and resolve a
+// Promise with the result. A host that cannot await that gets the
+// handshake, has nowhere to go, and reports "no stream data".
+globalThis.__host_features = ["Async"];
 globalThis.__host_uuid = () => crypto.randomUUID();
 globalThis.__host_md5 = (s) =>
   createHash("md5").update(String(s), "utf8").digest("hex");

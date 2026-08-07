@@ -11,6 +11,7 @@ each other.
 from __future__ import annotations
 
 import abc
+import enum
 from typing import Any
 
 from ..media import (
@@ -35,6 +36,23 @@ class ProviderUnreachableError(ProviderError):
     """Network or server error reaching the backend."""
 
 
+class AuthKind(str, enum.Enum):
+    """How (and whether) a provider is signed in to.
+
+    Not every backend has an account: plugin-driven public feeds
+    (PeerTube via Grayjay, say) authenticate nothing, and offering them
+    a sign-in button is a dead end — worse, a shell that assumes one
+    scheme will open the wrong dialog entirely.
+    """
+
+    #: No account. Content is public or the plugin carries its own auth.
+    NONE = "none"
+    #: Username + password.
+    PASSWORD = "password"
+    #: Code-based pairing, with password as a fallback.
+    QUICK_CONNECT = "quick_connect"
+
+
 class MediaProvider(abc.ABC):
     """One backend that produces ``MediaItem``s.
 
@@ -50,6 +68,10 @@ class MediaProvider(abc.ABC):
 
     #: Human-readable name for the "Add Source" gallery.
     display_name: str = ""
+
+    #: How this provider is signed in to. Shells use it to decide
+    #: whether to offer a sign-in affordance at all, and which one.
+    auth_kind: AuthKind = AuthKind.PASSWORD
 
     def __init__(self) -> None:
         self.config: dict[str, Any] = {}
