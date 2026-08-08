@@ -9,6 +9,8 @@ inspects provider-specific shapes.
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -27,6 +29,29 @@ class ContentType(str, Enum):
     PODCAST = "podcast"
     PODCAST_EPISODE = "podcast_episode"
     OTHER = "other"
+
+
+_LEADING_ARTICLES = ("the ", "a ", "an ")
+
+
+def normalized_title(title: str) -> str:
+    """Title reduced to a comparable form.
+
+    Case, punctuation, spacing and the article all vary between
+    metadata sources — including the "Matrix, The" sort form that
+    library servers like to store.
+    """
+    text = re.sub(r"\s+", " ", (title or "").casefold()).strip()
+    for article in _LEADING_ARTICLES:
+        # "matrix, the" -> "matrix"
+        suffix = ", " + article.strip()
+        if text.endswith(suffix):
+            text = text[: -len(suffix)]
+            break
+        if text.startswith(article):
+            text = text[len(article):]
+            break
+    return re.sub(r"[^a-z0-9]+", "", text)
 
 
 class Capability(str, Enum):
@@ -143,9 +168,31 @@ class MediaItem:
         return f"{self.provider_id}:{self.provider_item_id}"
 
     @property
+    def match_key(self) -> str:
+        """Identity of this title *across* sources.
+
+        A canonical id (TMDB/TVDB) is authoritative when the server has
+        one. Plenty of home libraries don't: without a fallback the same
+        film on two servers is two unrelated tiles, and a shell can
+        neither collapse them nor offer a choice of source.
+
+        The fallback is normalized-title + year, and only for movies and
+        shows — episode and track titles collide constantly ("Pilot",
+        "Intro"), so merging those on title would join unrelated things.
+        Titles with no year keep their per-source identity too.
+        """
+        if self.canonical_id:
+            return self.canonical_id
+        if self.content_type in (ContentType.MOVIE, ContentType.SHOW):
+            norm = normalized_title(self.title)
+            if norm and self.year:
+                return f"title:{norm}:{self.year}"
+        return self.key
+
+    @property
     def dedup_key(self) -> str:
         """Key used for cross-provider dedup."""
-        return self.canonical_id or self.key
+        return self.match_key
 
 
 @dataclass(slots=True)

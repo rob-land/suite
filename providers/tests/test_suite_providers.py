@@ -116,3 +116,49 @@ def test_auth_kind_values_are_stable():
     # Shells persist and compare these as plain strings.
     from suite_providers.aio.base import AuthKind
     assert {k.value for k in AuthKind} == {"none", "password", "quick_connect"}
+
+
+# --- cross-source identity ------------------------------------------------
+# Plenty of home libraries carry no TMDB/TVDB ids. Without a fallback the
+# same film on two servers is two unrelated tiles that can be neither
+# collapsed nor offered as a choice of source (couch, 2026-08-08).
+
+
+def _item(title, year=None, ctype=None, provider="a", item_id="1",
+          canonical=None):
+    from suite_providers.media import ContentType, MediaItem
+    return MediaItem(
+        provider_id=provider, provider_item_id=item_id, title=title,
+        content_type=ctype or ContentType.MOVIE, year=year,
+        canonical_id=canonical)
+
+
+def test_canonical_id_wins_when_present():
+    a = _item("Heat", 1995, provider="jf1", canonical="tmdb:949")
+    b = _item("Heat", 1995, provider="jf2", item_id="9",
+              canonical="tmdb:949")
+    assert a.match_key == b.match_key == "tmdb:949"
+
+
+def test_same_film_on_two_servers_matches_without_ids():
+    a = _item("The Matrix", 1999, provider="jf1")
+    b = _item("matrix,  the", 1999, provider="jf2", item_id="77")
+    assert a.match_key == b.match_key
+
+
+def test_different_years_stay_distinct():
+    assert _item("Dune", 1984).match_key != _item("Dune", 2021).match_key
+
+
+def test_titles_without_a_year_keep_source_identity():
+    a = _item("Home Video", provider="jf1")
+    b = _item("Home Video", provider="jf2", item_id="9")
+    assert a.match_key != b.match_key
+
+
+def test_episodes_never_merge_on_title():
+    from suite_providers.media import ContentType
+    a = _item("Pilot", 2005, ContentType.EPISODE, provider="jf1")
+    b = _item("Pilot", 2005, ContentType.EPISODE, provider="jf1",
+              item_id="99")
+    assert a.match_key != b.match_key
