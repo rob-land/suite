@@ -35,6 +35,10 @@ class Capability(str, Enum):
     MUSIC = "music"
     PODCASTS = "podcasts"
     LIVE_TV = "live_tv"
+    #: A flat, browsable stream of items with no library hierarchy —
+    #: a Grayjay/PeerTube channel feed, say. Distinct from MOVIES: a
+    #: shell that conflates them files random videos under "Movies".
+    FEED = "feed"
     SEARCH = "search"
     RECOMMENDATIONS = "recommendations"
     WATCHLIST = "watchlist"
